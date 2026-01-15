@@ -22,7 +22,7 @@ interface SuspectResult {
 
 interface CopycatResponse {
   success: boolean;
-  searchMode?: "open" | "targeted";
+  searchMode?: "open";
   originalTweetInfo?: {
     content: string;
     date: string;
@@ -35,25 +35,15 @@ interface CopycatResponse {
   error?: string;
 }
 
-type SearchMode = "targeted" | "open";
-
 export default function CopyCatPage() {
-  const [searchMode, setSearchMode] = useState<SearchMode>("open");
   const [originalTweet, setOriginalTweet] = useState("");
   const [tweetUrl, setTweetUrl] = useState("");
   const [originalDate, setOriginalDate] = useState("");
-  const [suspects, setSuspects] = useState<string[]>(["", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<CopycatResponse | null>(null);
   const [error, setError] = useState("");
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const resultListRef = useRef<HTMLDivElement>(null);
-
-  const updateSuspect = (index: number, value: string) => {
-    const newSuspects = [...suspects];
-    newSuspects[index] = value;
-    setSuspects(newSuspects);
-  };
 
   const handleSubmit = async () => {
     setError("");
@@ -65,20 +55,9 @@ export default function CopyCatPage() {
       return;
     }
 
-    // For targeted search, require suspects
-    if (searchMode === "targeted") {
-      const filledSuspects = suspects.filter((s) => s.trim().length > 0);
-      if (filledSuspects.length === 0) {
-        setError("Please enter at least one suspect handle");
-        return;
-      }
-    }
-
     setIsLoading(true);
 
     try {
-      const filledSuspects = suspects.filter((s) => s.trim().length > 0);
-
       const response = await fetch("/api/copycat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -86,18 +65,47 @@ export default function CopyCatPage() {
           originalTweet: originalTweet.trim() || undefined,
           tweetUrl: tweetUrl.trim() || undefined,
           originalDate: originalDate || undefined,
-          suspects: searchMode === "targeted" ? filledSuspects : undefined,
-          searchMode,
         }),
       });
 
-      const data = await response.json();
-
+      // Handle non-streaming error responses
       if (!response.ok) {
-        throw new Error(data.error || "Failed to detect copycats");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to detect copycats");
       }
 
-      setResult(data);
+      // Read SSE stream
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Failed to read response stream");
+      }
+
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value);
+        // Parse SSE data lines
+        const lines = text.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "done") {
+                // Final result received
+                setResult(data);
+              } else if (data.type === "error") {
+                throw new Error(data.error);
+              }
+              // Ignore "chunk" type - just keeping connection alive
+            } catch {
+              // Ignore parse errors for partial chunks
+            }
+          }
+        }
+      }
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {
@@ -189,47 +197,6 @@ export default function CopyCatPage() {
 
           {/* Input Form */}
           <Card className="p-6 bg-card border-border mb-8">
-            {/* Search Mode Toggle */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium mb-3">
-                Search Mode
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setSearchMode("open")}
-                  className={`p-4 rounded-lg border-2 transition-all text-left ${searchMode === "open"
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/50"
-                    }`}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">🌐</span>
-                    <span className="font-semibold">Open Search</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Search all of X for any account that copied your tweet
-                  </p>
-                </button>
-                <button
-                  onClick={() => setSearchMode("targeted")}
-                  className={`p-4 rounded-lg border-2 transition-all text-left ${searchMode === "targeted"
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/50"
-                    }`}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">🎯</span>
-                    <span className="font-semibold">Targeted Search</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Check specific accounts (up to 5 suspects)
-                  </p>
-                </button>
-              </div>
-            </div>
-
-            <div className="h-px bg-border my-6" />
-
             {/* Original Tweet Input */}
             <div className="mb-6">
               <label className="block text-sm font-medium mb-2">
@@ -257,7 +224,7 @@ export default function CopyCatPage() {
               <label className="block text-sm font-medium mb-2">
                 Tweet URL
                 <span className="text-muted-foreground font-normal ml-2">
-                  (we&apos;ll extract content & date)
+                  (we&apos;ll extract content &amp; date)
                 </span>
               </label>
               <input
@@ -285,37 +252,6 @@ export default function CopyCatPage() {
               />
             </div>
 
-            {/* Suspect Handles - Only show for targeted search */}
-            {searchMode === "targeted" && (
-              <>
-                <div className="h-px bg-border my-6" />
-                <div className="mb-6">
-                  <label className="block text-sm font-medium mb-2">
-                    Suspect Handles
-                    <span className="text-muted-foreground font-normal ml-2">
-                      (up to 5 Twitter/X usernames)
-                    </span>
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {suspects.map((suspect, index) => (
-                      <div key={index} className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground">
-                          @
-                        </span>
-                        <input
-                          type="text"
-                          value={suspect}
-                          onChange={(e) => updateSuspect(index, e.target.value)}
-                          placeholder={`suspect${index + 1}`}
-                          className="w-full p-4 pl-8 bg-secondary/50 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
             {/* Error Message */}
             {error && (
               <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-500 text-sm">
@@ -332,24 +268,17 @@ export default function CopyCatPage() {
               {isLoading ? (
                 <>
                   <span className="animate-spin">🔄</span>
-                  {searchMode === "open"
-                    ? "Searching all of X..."
-                    : "Searching suspects..."
-                  }
+                  Searching all of X...
                 </>
               ) : (
                 <>
-                  {searchMode === "open" ? "🌐" : "🎯"}
-                  {searchMode === "open"
-                    ? " Find Copycats Anywhere"
-                    : " Check Suspects"
-                  }
+                  🌐 Find Copycats Anywhere
                 </>
               )}
             </button>
           </Card>
 
-          {/* Results Section - RESTORED LIST VIEW */}
+          {/* Results Section - LIST VIEW */}
           {result && (
             <div className="space-y-6">
 
