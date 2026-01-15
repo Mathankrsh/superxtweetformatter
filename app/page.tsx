@@ -234,6 +234,14 @@ export default function CopyCatPage() {
                 placeholder="https://twitter.com/username/status/..."
                 className="w-full p-4 bg-secondary/50 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground"
               />
+              {/* Try Example Button */}
+              <button
+                type="button"
+                onClick={() => setTweetUrl("https://x.com/livingdevops/status/1977009018326368573")}
+                className="mt-2 text-xs text-primary hover:underline"
+              >
+                ✨ Try this example tweet
+              </button>
             </div>
 
             {/* Original Date (optional) */}
